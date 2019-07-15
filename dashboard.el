@@ -1,6 +1,6 @@
 ;;; dashboard.el --- A startup screen extracted from Spacemacs  -*- lexical-binding: t -*-
 
-;; Copyright (c) 2016 Rakan Al-Hneiti & Contributors
+;; Copyright (c) 2016-2019 Rakan Al-Hneiti & Contributors
 ;;
 ;; Author: Rakan Al-Hneiti
 ;; URL: https://github.com/emacs-dashboard/emacs-dashboard
@@ -10,10 +10,9 @@
 ;;; License: GPLv3
 ;;
 ;; Created: October 05, 2016
-;; Modified: December 30, 2016
-;; Version: 1.2.5
-;; Keywords: startup screen tools
-;; Package-Requires: ((emacs "24.4") (page-break-lines "0.11"))
+;; Package-Version: 1.7.0-SNAPSHOT
+;; Keywords: startup, screen, tools, dashboard
+;; Package-Requires: ((emacs "25.3") (page-break-lines "0.11"))
 ;;; Commentary:
 
 ;; An extensible Emacs dashboard, with sections for
@@ -21,11 +20,9 @@
 
 ;;; Code:
 
-(require 'bookmark)
-(require 'calendar)
+(require 'seq)
 (require 'page-break-lines)
 (require 'recentf)
-(require 'register)
 
 (require 'dashboard-widgets)
 
@@ -36,10 +33,12 @@
     (define-key map (kbd "C-n") 'dashboard-next-line)
     (define-key map (kbd "<up>") 'dashboard-previous-line)
     (define-key map (kbd "<down>") 'dashboard-next-line)
+    (define-key map (kbd "k") 'dashboard-previous-line)
+    (define-key map (kbd "j") 'dashboard-next-line)
     (define-key map [tab] 'widget-forward)
     (define-key map (kbd "C-i") 'widget-forward)
     (define-key map [backtab] 'widget-backward)
-    (define-key map (kbd "RET") 'widget-button-press)
+    (define-key map (kbd "RET") 'dashboard-return)
     (define-key map [down-mouse-1] 'widget-button-click)
     (define-key map (kbd "g") #'dashboard-refresh-buffer)
     (define-key map (kbd "}") #'dashboard-next-section)
@@ -127,6 +126,30 @@ Optional prefix ARG says how many lines to move; default is one line."
     (forward-char (if (and arg (< arg 0)) -1 1)))
   (beginning-of-line-text))
 
+(defun dashboard-return ()
+  "Hit return key in dashboard buffer."
+  (interactive)
+  (let ((start-ln (line-number-at-pos))
+        (fd-cnt 0)
+        (diff-line nil)
+        (entry-pt nil))
+    (save-excursion
+      (while (and (not diff-line)
+                  (not (= (point) (point-min)))
+                  (not (get-char-property (point) 'button))
+                  (not (= (point) (point-max))))
+        (forward-char 1)
+        (setq fd-cnt (1+ fd-cnt))
+        (unless (= start-ln (line-number-at-pos))
+          (setq diff-line t)))
+      (unless (= (point) (point-max))
+        (setq entry-pt (point))))
+    (when (= fd-cnt 1)
+      (setq entry-pt (1- (point))))
+    (if entry-pt
+        (widget-button-press entry-pt)
+      (call-interactively #'widget-button-press))))
+
 (defun dashboard-maximum-section-length ()
   "For the just-inserted section, calculate the length of the longest line."
   (let ((max-line-length 0))
@@ -155,8 +178,7 @@ Optional prefix ARG says how many lines to move; default is one line."
     ;; (this avoids many saves/loads that would result from
     ;; disabling/enabling recentf-mode)
     (if recentf-is-on
-        (setq recentf-list (seq-take recentf-list dashboard-num-recents))
-      )
+        (setq recentf-list (seq-take recentf-list dashboard-num-recents)))
     (when (or (not (eq dashboard-buffer-last-width (window-width)))
               (not buffer-exists))
       (setq dashboard-banner-length (window-width)

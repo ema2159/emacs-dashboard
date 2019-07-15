@@ -1,6 +1,6 @@
 ;;; dashboard-widgets.el --- A startup screen extracted from Spacemacs  -*- lexical-binding: t -*-
 
-;; Copyright (c) 2016 Rakan Al-Hneiti & Contributors
+;; Copyright (c) 2016-2019 Rakan Al-Hneiti & Contributors
 ;;
 ;; Author: Rakan Al-Hneiti
 ;; URL: https://github.com/emacs-dashboard/emacs-dashboard
@@ -10,10 +10,9 @@
 ;;; License: GPLv3
 ;;
 ;; Created: October 05, 2016
-;; Modified: December 30, 2016
-;; Version: 1.2.5
-;; Keywords: startup screen tools
-;; Package-Requires: ((emacs "24.4") (page-break-lines "0.11"))
+;; Package-Version: 1.7.0-SNAPSHOT
+;; Keywords: startup, screen, tools, dashboard
+;; Package-Requires: ((emacs "25.3") (page-break-lines "0.11"))
 ;;; Commentary:
 
 ;; An extensible Emacs dashboard, with sections for
@@ -54,8 +53,13 @@ to the specified width, with aspect ratio preserved."
   :type 'boolean
   :group 'dashboard)
 
+(defcustom dashboard-set-navigator nil
+  "When non nil, a navigator will be displayed under the banner."
+  :type 'boolean
+  :group 'dashboard)
+
 (defcustom dashboard-set-init-info t
-  "When non nil, init info will be displayed under banner."
+  "When non nil, init info will be displayed under the banner."
   :type 'boolean
   :group 'dashboard)
 
@@ -67,6 +71,13 @@ to the specified width, with aspect ratio preserved."
 (defcustom dashboard-show-shortcuts t
   "Whether to show shortcut keys for each section."
   :type 'boolean
+  :group 'dashboard)
+
+(defcustom dashboard-org-agenda-categories nil
+  "Specify the Categories to consider when using agenda in dashboard.
+Example:
+'(\"Tasks\" \"Habits\")"
+  :type 'list
   :group 'dashboard)
 
 (defconst dashboard-banners-directory
@@ -88,12 +99,22 @@ to the specified width, with aspect ratio preserved."
 (defvar dashboard-banner-logo-title "Welcome to Emacs!"
   "Specify the startup banner.")
 
+(defvar dashboard-navigator-buttons nil
+  "Specify the navigator buttons.
+The format is: 'icon title help action face prefix suffix'.
+
+Example:
+'((\"☆\" \"Star\" \"Show stars\" (lambda (&rest _) (show-stars)) 'warning \"[\" \"]\"))")
+
 (defvar dashboard-init-info
   ;; Check if package.el was loaded and if package loading was enabled
-  (if (bound-and-true-p package-enable-at-startup)
+  (if (bound-and-true-p package-alist)
       (format "%d packages loaded in %s"
               (length package-activated-list) (emacs-init-time))
-    (format "Emacs started in %s" (emacs-init-time)))
+    (if (and (boundp 'straight--profile-cache) (hash-table-p straight--profile-cache))
+        (format "%d packages loaded in %s"
+                (hash-table-size straight--profile-cache) (emacs-init-time))
+      (format "Emacs started in %s" (emacs-init-time))))
   "Init info with packages loaded and init time.")
 
 (defvar dashboard-footer
@@ -111,10 +132,15 @@ to the specified width, with aspect ratio preserved."
     (nth (random (1- (1+ (length list)))) list))
   "A footer with some short message.")
 
-(defvar dashboard-footer-icon (all-the-icons-fileicon "emacs"
-                                                      :height 1.1
-                                                      :v-adjust -0.05
-                                                      :face 'font-lock-keyword-face)
+(defvar dashboard-footer-icon
+  (if (and (display-graphic-p)
+           (or (fboundp 'all-the-icons-fileicon)
+               (require 'all-the-icons nil 'noerror)))
+      (all-the-icons-fileicon "emacs"
+                              :height 1.1
+                              :v-adjust -0.05
+                              :face 'font-lock-keyword-face)
+    (propertize ">" 'face 'dashboard-footer))
   "Footer's icon.")
 
 (defvar dashboard-startup-banner 'official
@@ -171,8 +197,18 @@ If nil it is disabled.  Possible values for list-type are:
   "Face used for the banner title."
   :group 'dashboard)
 
+(defface dashboard-navigator
+  '((t (:inherit font-lock-keyword-face)))
+  "Face used for the havigator."
+  :group 'dashboard)
+
 (defface dashboard-heading
   '((t (:inherit font-lock-keyword-face)))
+  "Face used for widget headings."
+  :group 'dashboard)
+
+(defface dashboard-footer
+  '((t (:inherit font-lock-doc-face)))
   "Face used for widget headings."
   :group 'dashboard)
 
@@ -245,7 +281,8 @@ If MESSAGEBUF is not nil then MSG is also written in message buffer."
              ((string-equal heading "Bookmarks:")
               (all-the-icons-octicon (cdr (assoc 'bookmarks dashboard-heading-icons))
                                      :height 1.2 :v-adjust 0.0 :face 'dashboard-heading))
-             ((string-equal heading "Agenda for today:")
+             ((or (string-equal heading "Agenda for today:")
+                  (string-equal heading "Agenda for the coming week:"))
               (all-the-icons-octicon (cdr (assoc 'agenda dashboard-heading-icons))
                                      :height 1.2 :v-adjust 0.0 :face 'dashboard-heading))
              ((string-equal heading "Registers:")
@@ -253,7 +290,8 @@ If MESSAGEBUF is not nil then MSG is also written in message buffer."
                                      :height 1.2 :v-adjust 0.0 :face 'dashboard-heading))
              ((string-equal heading "Projects:")
               (all-the-icons-octicon (cdr (assoc 'projects dashboard-heading-icons))
-                                     :height 1.2 :v-adjust 0.0 :face 'dashboard-heading))))
+                                     :height 1.2 :v-adjust 0.0 :face 'dashboard-heading))
+             (t " ")))
     (insert " "))
 
   (insert (propertize heading 'face 'dashboard-heading))
@@ -360,7 +398,46 @@ If MESSAGEBUF is not nil then MSG is also written in message buffer."
         (if (image-type-available-p (intern (file-name-extension banner)))
             (dashboard-insert-image-banner banner)
           (dashboard-insert-ascii-banner-centered banner))
+        (dashboard-insert-navigator)
         (dashboard-insert-init-info)))))
+
+(defun dashboard-insert-navigator ()
+  "Insert Navigator of the dashboard."
+  (when (and dashboard-set-navigator dashboard-navigator-buttons)
+    (dolist (line dashboard-navigator-buttons)
+      (dolist (btn line)
+        (let* ((icon (car btn))
+               (title (cadr btn))
+               (help (or (cadr (cdr btn)) ""))
+               (action (or (cadr (cddr btn)) #'ignore))
+               (face (or (cadr (cddr (cdr btn))) 'dashboard-navigator))
+               (prefix (or (cadr (cddr (cddr btn))) (propertize "[" 'face face)))
+               (suffix (or (cadr (cddr (cddr (cdr btn)))) (propertize "]" 'face face))))
+          (widget-create 'item
+                         :tag (concat
+                               (when icon
+                                 (propertize icon 'face `(:inherit
+                                                          ,(get-text-property 0 'face icon)
+                                                          :inherit
+                                                          ,face)))
+                               (when (and icon title
+                                          (not (string-equal icon ""))
+                                          (not (string-equal title "")))
+                                 (propertize " " 'face 'variable-pitch))
+                               (when title (propertize title 'face face)))
+                         :help-echo help
+                         :action action
+                         :mouse-face 'highlight
+                         :button-prefix prefix
+                         :button-suffix suffix
+                         :format "%[%t%]")
+          (insert " ")))
+      (let* ((width (current-column)))
+        (beginning-of-line)
+        (dashboard-center-line (make-string width ?\s))
+        (end-of-line))
+      (insert "\n"))
+    (insert "\n")))
 
 (defmacro dashboard-insert-section (section-name list list-size shortcut action &rest widget-params)
   "Add a section with SECTION-NAME and LIST of LIST-SIZE items to the dashboard.
@@ -433,10 +510,10 @@ WIDGET-PARAMS are passed to the \"widget-create\" function."
   (when dashboard-set-footer
     (insert "\n")
     (dashboard-center-line dashboard-footer)
-    (when (display-graphic-p)
-      (insert dashboard-footer-icon))
+    (insert dashboard-footer-icon)
     (insert " ")
-    (insert (propertize dashboard-footer 'face 'font-lock-doc-face))))
+    (insert (propertize dashboard-footer 'face 'dashboard-footer))
+    (insert "\n")))
 
 ;;
 ;; Recentf
@@ -476,6 +553,7 @@ WIDGET-PARAMS are passed to the \"widget-create\" function."
 (defun dashboard-insert-projects (list-size)
   "Add the list of LIST-SIZE items of projects."
   (require 'projectile)
+  (projectile-cleanup-known-projects)
   (projectile-load-known-projects)
   (dashboard-insert-section
    "Projects:"
@@ -537,12 +615,14 @@ date part is considered."
                        t))
                 (loc (point))
                 (file (buffer-file-name)))
-           (when (and (not (org-entry-is-done-p))
-                      (or (and schedule-time (dashboard-date-due-p schedule-time due-date))
-                          (and deadline-time (dashboard-date-due-p deadline-time due-date))))
-             (setq filtered-entries
-                   (append filtered-entries
-                           (list (list item schedule-time deadline-time loc file)))))))
+           (if (or (equal dashboard-org-agenda-categories nil)
+                   (member (org-get-category) dashboard-org-agenda-categories))
+               (when (and (not (org-entry-is-done-p))
+                          (or (and schedule-time (dashboard-date-due-p schedule-time due-date))
+                              (and deadline-time (dashboard-date-due-p deadline-time due-date))))
+                 (setq filtered-entries
+                       (append filtered-entries
+                               (list (list item schedule-time deadline-time loc file))))))))
        nil
        'agenda)
       filtered-entries)))
@@ -550,6 +630,7 @@ date part is considered."
 (defun dashboard-insert-agenda (list-size)
   "Add the list of LIST-SIZE items of agenda."
   (require 'org-agenda)
+  (require 'calendar)
   (let ((agenda (dashboard-get-agenda)))
     (dashboard-insert-section
      (or (and (boundp 'show-week-agenda-p) show-week-agenda-p "Agenda for the coming week:")
@@ -584,6 +665,7 @@ date part is considered."
 (declare-function bookmark-all-names "ext:bookmark.el")
 (declare-function projectile-mode "ext:projectile.el")
 (declare-function projectile-load-known-projects "ext:projectile.el")
+(declare-function projectile-cleanup-known-projects "ext:projectile.el")
 (declare-function projectile-relevant-known-projects "ext:projectile.el")
 (declare-function org-agenda-format-item "ext:org-agenda.el")
 (declare-function org-compile-prefix-format "ext:org-agenda.el")
